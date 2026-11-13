@@ -1,5 +1,8 @@
+import warnings
+
 import numpy as np
 import pandas as pd
+import pytest
 from statsforecast.mstl import mstl
 
 
@@ -32,3 +35,44 @@ def test_mstl():
 
     assert decomposition is not None, "MSTL decomposition should return a result"
     assert hasattr(decomposition, "plot"), "Decomposition should have a plot method"
+
+
+def _seasonal_series(n, periods=(7,), seed=0):
+    rng = np.random.default_rng(seed)
+    t = np.arange(n)
+    y = 20 + 0.05 * t + rng.normal(size=n)
+    for p in periods:
+        y += np.sin(2 * np.pi * t / p)
+    return y
+
+
+def test_mstl_drops_periods_without_two_full_cycles():
+    # https://github.com/Nixtla/statsforecast/issues/969
+    # as in R's forecast::mstl(), periods with period >= n / 2 are dropped
+    y = _seasonal_series(20, periods=(12,))
+    with pytest.warns(UserWarning, match="fewer than two full periods"):
+        res = mstl(y, period=12)
+    assert res.columns.tolist() == ["data", "trend", "remainder"]
+    np.testing.assert_allclose(res["trend"] + res["remainder"], y)
+
+
+def test_mstl_keeps_periods_with_two_full_cycles():
+    y = _seasonal_series(60, periods=(7, 30))
+    with pytest.warns(UserWarning, match="fewer than two full periods"):
+        res = mstl(y, period=[30, 7])
+    pd.testing.assert_frame_equal(res, mstl(y, period=7))
+    # the s_window of a dropped period is dropped with it
+    with pytest.warns(UserWarning, match="fewer than two full periods"):
+        res = mstl(y, period=[7, 30], s_window=np.array([9, 13]))
+    pd.testing.assert_frame_equal(res, mstl(y, period=7, s_window=np.array([9])))
+    # series with at least two full cycles of every period are unchanged
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = mstl(_seasonal_series(61, periods=(7, 30)), period=[7, 30])
+    assert res.columns.tolist() == [
+        "data",
+        "trend",
+        "seasonal7",
+        "seasonal30",
+        "remainder",
+    ]

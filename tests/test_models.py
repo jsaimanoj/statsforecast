@@ -47,7 +47,9 @@ from statsforecast.models import (
     SklearnModel,
     WindowAverage,
 )
+from statsforecast import StatsForecast
 from statsforecast.utils import AirPassengers as ap
+from statsforecast.utils import generate_series
 
 
 def _plot_insample_pi(fcst):
@@ -1958,6 +1960,45 @@ class TestMSTL:
         # test alias argument
         assert repr(MSTL(season_length=7)) == "MSTL"
         assert repr(MSTL(season_length=7, alias="MSTL_custom")) == "MSTL_custom"
+
+    @pytest.mark.filterwarnings("ignore:Dropping seasonal components")
+    def test_series_shorter_than_two_periods(self):
+        # https://github.com/Nixtla/statsforecast/issues/969
+        rng = np.random.default_rng(0)
+        t = np.arange(60)
+        y = 20 + 0.05 * t + np.sin(2 * np.pi * t / 7) + rng.normal(size=t.size)
+        h = 12
+        trend = Naive()
+        # no period fits: the series is forecasted by the trend forecaster
+        for n in (11, 12, 24):
+            fcst = MSTL(season_length=12, trend_forecaster=trend).forecast(
+                y=y[:n], h=h, fitted=True
+            )
+            expected = trend.forecast(y=y[:n], h=h, fitted=True)
+            np.testing.assert_allclose(fcst["mean"], expected["mean"])
+            np.testing.assert_allclose(fcst["fitted"], expected["fitted"])
+            model = MSTL(season_length=12, trend_forecaster=trend).fit(y[:n])
+            np.testing.assert_allclose(model.predict(h=h)["mean"], expected["mean"])
+            np.testing.assert_allclose(
+                model.forward(y=y[:n], h=h)["mean"], expected["mean"]
+            )
+        # only the periods with two full cycles are kept
+        np.testing.assert_allclose(
+            MSTL(season_length=[7, 30]).forecast(y=y, h=h)["mean"],
+            MSTL(season_length=7).forecast(y=y, h=h)["mean"],
+        )
+
+    def test_cross_validation_short_training_window(self):
+        # reproducer from https://github.com/Nixtla/statsforecast/issues/969
+        df = generate_series(n_series=1, freq="MS", min_length=25, max_length=25)
+        sf = StatsForecast(models=[MSTL(season_length=[12])], freq="MS")
+        for refit in (False, True):
+            with pytest.warns(UserWarning, match="fewer than two full periods"):
+                cv = sf.cross_validation(
+                    df=df, h=12, step_size=1, n_windows=3, refit=refit
+                )
+            assert cv.shape[0] == 36
+            assert cv["MSTL"].notna().all()
 
 
 class TestOptimizedTheta:

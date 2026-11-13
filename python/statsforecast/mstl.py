@@ -1,11 +1,19 @@
 __all__ = ['mstl']
 
 
+import warnings
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+
+
+def _has_two_full_periods(periods: List[int], n: int) -> List[bool]:
+    # R's forecast::mstl() drops the seasonal periods that don't have at least
+    # two full cycles in the data (period >= n / 2), see
+    # https://github.com/robjhyndman/forecast/blob/master/R/mstl.R#L37
+    return [p == 1 or p < n / 2 for p in periods]
 
 
 def mstl(
@@ -22,6 +30,12 @@ def mstl(
         msts = [period]
     else:
         msts = sorted(period)
+    keep = _has_two_full_periods(msts, n)
+    if not all(keep):
+        warnings.warn("Dropping seasonal components with fewer than two full periods.")
+        if s_window is not None and np.size(s_window) == len(msts):
+            s_window = np.ravel(s_window)[keep]
+        msts = [p for p, k in zip(msts, keep) if k]
     if s_window is None:
         # default seasonal windows 11, 15, 19, ... following R's
         # forecast::mstl() (7 + 4*k), see
@@ -45,7 +59,12 @@ def mstl(
             "Please raise an issue to include this feature."
         )
     stl_kwargs = {"seasonal_deg": 0, **stl_kwargs}
-    if msts[0] > 1:
+    if not msts:
+        # no seasonal period can be estimated, so there's nothing to remove
+        # from the series
+        deseas = np.copy(x)
+        trend = np.copy(x)
+    elif msts[0] > 1:
         seas = np.zeros((len(msts), n))
         deseas = np.copy(x)
         if len(s_window) == 1:
@@ -71,7 +90,7 @@ def mstl(
     deseas[np.isnan(origx)] = np.nan
     remainder = deseas - trend
     output = {"data": origx, "trend": trend}
-    if msts is not None and msts[0] > 1:
+    if msts and msts[0] > 1:
         if len(msts) == 1:
             output["seasonal"] = seas[0]
         else:

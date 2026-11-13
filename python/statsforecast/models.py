@@ -99,7 +99,7 @@ from statsforecast.utils import (
 from .ces import auto_ces, forecast_ces, forward_ces
 from .garch import garch_forecast, garch_model
 from .mfles import MFLES as _MFLES
-from .mstl import mstl
+from .mstl import _has_two_full_periods, mstl
 from .tbats import _compute_sigmah, tbats_forecast, tbats_selection
 from .theta import auto_theta, forecast_theta, forward_theta
 from .ucm import UCM, LocalLevel, LocalLinearTrend, SmoothTrend  # noqa: F401
@@ -6019,9 +6019,12 @@ def _predict_mstl_components(mstl_ob, h, season_length):
     seasoncolumns = mstl_ob.filter(regex="seasonal*").columns
     nseasons = len(seasoncolumns)
     seascomp = np.full((h, nseasons), np.nan)
-    seasonal_periods = (
+    seasonal_periods = sorted(
         [season_length] if isinstance(season_length, int) else season_length
     )
+    # same periods that `mstl` kept for a series of this length
+    keep = _has_two_full_periods(seasonal_periods, len(mstl_ob))
+    seasonal_periods = [p for p, k in zip(seasonal_periods, keep) if k]
     for i in range(nseasons):
         mp = seasonal_periods[i]
         colname = seasoncolumns[i]
